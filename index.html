@@ -126,10 +126,12 @@ ws.onmessage=e=>{
 };
 
 function login(){
-  username=usernameInput.value;
-  ws.send(JSON.stringify({type:"register",name:username}));
+  const name = usernameInput.value.trim();
+  if(!name) return alert("Enter a username");
+
+  ws.send(JSON.stringify({ type:"register", name }));
+  status.innerText="Sent login";
   login.style.display="none";
-  searchUsers();
 }
 
 function openDM(user){
