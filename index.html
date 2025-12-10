@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>PrivateMail</title>
+<style>
+*{box-sizing:border-box;font-family:system-ui;}
+body{margin:0;background:#1e1f22;display:flex;height:100vh;color:white}
+#servers{width:60px;background:#111;padding:10px;display:flex;flex-direction:column}
+.server{width:40px;height:40px;border-radius:50%;background:#5865f2;margin-bottom:10px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+#channels{width:240px;background:#2b2d31;padding:10px}
+.thread{padding:6px;cursor:pointer}
+.thread:hover{background:#3f4147}
+.active{background:#5865f2}
+#main{flex:1;display:flex;flex-direction:column}
+#header{padding:8px;background:#292b2f}
+#chat{flex:1;overflow-y:auto;padding:10px}
+.msg{margin-bottom:8px}
+.avatar{width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:black;margin-right:6px;font-weight:bold}
+.user{font-weight:bold}
+.typing{font-size:12px;color:#9fa2a7}
+#inputArea{background:#383a40;padding:10px}
+#input{width:100%;padding:8px;border:none;border-radius:6px}
+#users{width:200px;background:#2b2d31;padding:8px}
+.us{padding:4px;cursor:pointer}
+.us:hover{background:#3f4147}
+.unread{float:right;background:red;border-radius:10px;padding:2px 5px;font-size:10px}
+#login{position:fixed;inset:0;background:black;display:flex;align-items:center;justify-content:center}
+#loginBox{background:#2b2d31;padding:20px}
+</style>
+</head>
+
+<body>
+
+<div id="login">
+  <div id="loginBox">
+    <input id="username" placeholder="Username">
+    <button onclick="login()">Enter</button>
+  </div>
+</div>
+
+<div id="servers">
+  <div class="server" onclick="openThread('global')">🌍</div>
+</div>
+
+<div id="channels">
+  <b>DMs</b>
+  <div id="threads"></div>
+</div>
+
+<div id="main">
+  <div id="header"></div>
+  <div id="chat"></div>
+  <div id="inputArea">
+    <input id="input" placeholder="Message…">
+    <div class="typing" id="typing"></div>
+  </div>
+</div>
+
+<div id="users"></div>
+
+<script>
+const ws = new WebSocket("wss://YOUR_WORKER_URL");
+let username=null;
+let threads={global:[]};
+let unread={};
+let current="global";
+let typingTimer=null;
+
+function color(name){
+  let h=0; for(let c of name)h=c.charCodeAt(0)+((h<<5)-h);
+  return `hsl(${h%360},60%,70%)`;
+}
+
+ws.onmessage=e=>{
+  const msg=JSON.parse(e.data);
+
+  if(msg.type==="registered") openThread("global");
+
+  if(msg.type==="thread_created"){
+    threads[msg.id]=[];
+    renderThreads();
+  }
+
+  if(msg.type==="new_message"){
+    threads[msg.thread]??=[];
+    threads[msg.thread].push(msg.message);
+    if(msg.thread!==current){
+      unread[msg.thread]=(unread[msg.thread]||0)+1;
+      renderThreads();
+    }
+    if(msg.thread===current) renderChat();
+  }
+
+  if(msg.type==="typing" && msg.thread===current){
+    document.getElementById("typing").innerText=msg.from+" is typing…";
+    clearTimeout(typingTimer);
+    typingTimer=setTimeout(()=>typing.innerText="",1200);
+  }
+
+  if(msg.type==="reaction_update"){
+    const el=document.getElementById("r_"+msg.mid);
+    if(el) el.innerText=msg.emoji+" "+msg.count;
+  }
+
+  if(msg.type==="seen_update"){}
+
+  if(msg.type==="presence"){
+    searchUsers();
+  }
+
+  if(msg.type==="search_results"){
+    users.innerHTML="";
+    msg.results.forEach(u=>{
+      const d=document.createElement("div");
+      d.className="us";
+      d.innerText=u.name+(u.online?" ●":"");
+      d.onclick=()=>openDM(u.name);
+      users.appendChild(d);
+    });
+  }
+
+  if(msg.type==="mention"){
+    new Notification("Mention from "+msg.from,{body:msg.message.data});
+  }
+};
+
+function login(){
+  username=usernameInput.value;
+  ws.send(JSON.stringify({type:"register",name:username}));
+  login.style.display="none";
+  searchUsers();
+}
+
+function openDM(user){
+  ws.send(JSON.stringify({type:"create_thread",recipients:[username,user]}));
+}
+
+function openThread(id){
+  current=id;
+  unread[id]=0;
+  renderThreads();
+  renderChat();
+}
+
+function renderThreads(){
+  threadsDiv.innerHTML="";
+  for(let id in threads){
+    const d=document.createElement("div");
+    d.className="thread"+(id===current?" active":"");
+    d.innerText=id==="global"?"🌍 Global":"DM "+id.slice(0,5);
+    if(unread[id]) d.innerHTML+="<span class='unread'>"+unread[id]+"</span>";
+    d.onclick=()=>openThread(id);
+    threadsDiv.appendChild(d);
+  }
+}
+
+function renderChat(){
+  header.innerText=current==="global"?"🌍 Global":current;
+  chat.innerHTML="";
+  (threads[current]||[]).forEach(m=>{
+    const d=document.createElement("div");
+    d.className="msg";
+    d.innerHTML=`
+      <span class="avatar" style="background:${color(m.from)}">${m.from[0]}</span>
+      <span class="user">${m.from}</span>: ${m.data}
+      <button onclick="react('${m.id}','👍')">👍</button>
+      <span id="r_${m.id}"></span>
+    `;
+    chat.appendChild(d);
+    ws.send(JSON.stringify({type:"seen",mid:m.id}));
+  });
+}
+
+input.oninput=()=>ws.send(JSON.stringify({type:"typing",thread:current,action:"start"}));
+
+input.onkeydown=e=>{
+  if(e.key!=="Enter")return;
+  ws.send(JSON.stringify({type:"typing",thread:current,action:"stop"}));
+  ws.send(JSON.stringify({type:"thread_message",thread:current,from:username,data:input.value}));
+  input.value="";
+};
+
+function react(mid,emoji){
+  ws.send(JSON.stringify({type:"react",mid,emoji}));
+}
+
+function searchUsers(){
+  ws.send(JSON.stringify({type:"search_users",query:""}));
+}
+
+setInterval(searchUsers,5000);
+</script>
+
+</body>
+</html>
